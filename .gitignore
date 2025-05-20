@@ -1,0 +1,38 @@
+# Python virtual environments
+venv/
+.venv/
+
+# Bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# Logs
+*.log
+
+# Jupyter/IPython checkpoints
+.ipynb_checkpoints/
+
+# Ignore all folders inside data/, but not the folder itself
+output/*/
+
+# VS Code / PyCharm / Editor configs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output images and temporary files
+*.png
+*.jpg
+*.jpeg
+*.tmp
+
+# Environment variables
+.env
+.env.*
+
