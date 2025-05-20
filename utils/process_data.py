@@ -109,28 +109,43 @@ class ProcessDataSymbolic:
         height = len(id_file)
         width = len(id_file[0])
 
-        # Get tile size
+        # Get tile size from any valid tile
         for test_id in self.tile_filenames:
             sample_path = os.path.join(tile_dir, self.tile_filenames[test_id])
             if os.path.exists(sample_path):
                 sample_tile = Image.open(sample_path)
                 tile_width, tile_height = sample_tile.size
+                print(f"[INFO] Tile size: {tile_width} x {tile_height}")
                 break
         else:
             raise RuntimeError("No valid tile images found in tile_filenames mapping.")
 
-        full_img = Image.new("RGBA", (width * tile_width, height * tile_height), (0, 0, 0, 0))  # transparent background
+        # Load background tile (ID 2 = '-')
+        background_filename = self.tile_filenames.get(2)
+        if background_filename is None:
+            raise RuntimeError("Missing background tile (ID 2) in tile_filenames mapping.")
+        
+        background_tile_path = os.path.join(tile_dir, background_filename)
+        if not os.path.exists(background_tile_path):
+            raise FileNotFoundError(f"Background tile file not found: {background_tile_path}")
+        
+        background_tile = Image.open(background_tile_path).convert("RGBA")
 
+        # Create the image canvas
+        full_img = Image.new("RGBA", (width * tile_width, height * tile_height))
+
+        # Render each tile
         for y, row in enumerate(id_file):
             for x, tile_id in enumerate(row):
                 filename = self.tile_filenames.get(tile_id)
                 if filename is None:
-                    continue  # leave transparent (e.g., for empty space)
-                tile_path = os.path.join(tile_dir, filename)
-                if not os.path.exists(tile_path):
-                    raise FileNotFoundError(f"Missing tile: {tile_path}")
-                tile = Image.open(tile_path).convert("RGBA")
-                full_img.paste(tile, (x * tile_width, y * tile_height))
+                    tile = background_tile  # Use background for unknown/missing tile IDs
+                else:
+                    tile_path = os.path.join(tile_dir, filename)
+                    if not os.path.exists(tile_path):
+                        raise FileNotFoundError(f"Missing tile: {tile_path}")
+                    tile = Image.open(tile_path).convert("RGBA")
+                full_img.paste(tile, (x * tile_width, y * tile_height), tile)
 
         if save_folder:
             os.makedirs(save_folder, exist_ok=True)

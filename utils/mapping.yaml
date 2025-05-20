@@ -22,6 +22,7 @@ symbol_identity:
 tile_filenames:
   0: encoding_0.png
   1: encoding_1.png
+  2: encoding_2.png
   3: encoding_3.png
   4: encoding_4.png
   5: encoding_5.png
