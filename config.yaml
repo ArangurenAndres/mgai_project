@@ -1,3 +1,5 @@
+
+
 model:
   in_channels: 10
   base_channels: 64
@@ -9,9 +11,11 @@ model:
 
 train:
 
+  epochs: 2
   embedding_dim: 16
   batch_size: 4
   learning_rate: 0.0001
-  epochs: 200
-  print_every: 30
+  print_interval: 30
   val_split: 0.1
+
+

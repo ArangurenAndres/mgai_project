@@ -4,8 +4,8 @@ import numpy as np
 import re
 import random
 from torch.utils.data import Dataset, DataLoader
-from process_data import ProcessDataSymbolic  # Adjust import if needed
-from load_files import load_config
+from .process_data import ProcessDataSymbolic  # Adjust import if needed
+from .load_files import load_config
 
 
 # Natural sorting for file names like "mario_1_1.txt"

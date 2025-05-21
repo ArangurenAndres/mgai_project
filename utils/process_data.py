@@ -1,12 +1,12 @@
 import numpy as np
 import os
 from PIL import Image
-from load_files import load_mapping
+from .load_files import load_mapping
 
 class ProcessDataSymbolic:
-    def __init__(self, embedding_dim:int=32,mapping_path: str = None):
+    def __init__(self, data_path:str=None ,embedding_dim:int=32,mapping_path: str = None):
         self.mapping = load_mapping(mapping_path)
-        # Load config directly from mapping.yaml
+        # Load config directly froam mapping.yaml
         data_config = self.mapping["data_process"]
         self.folder_path = data_config["folder_path"]
         if not os.path.isabs(self.folder_path):
