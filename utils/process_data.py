@@ -4,9 +4,8 @@ from PIL import Image
 from load_files import load_mapping
 
 class ProcessDataSymbolic:
-    def __init__(self, mapping_path: str = None):
+    def __init__(self, embedding_dim:int=32,mapping_path: str = None):
         self.mapping = load_mapping(mapping_path)
-
         # Load config directly from mapping.yaml
         data_config = self.mapping["data_process"]
         self.folder_path = data_config["folder_path"]
@@ -16,8 +15,8 @@ class ProcessDataSymbolic:
 
         self.window_dim = data_config["sliding_window"]
         self.stride = data_config.get("stride", 1)
-        self.embedding_dim = data_config.get("embedding_dim", 32)
-
+        #self.embedding_dim = data_config.get("embedding_dim", 32)
+        self.embedding_dim = embedding_dim
         # Load mappings
         self.symbol_to_id = self.mapping["symbol_identity"]
         self.id_to_symbol = {v: k for k, v in self.symbol_to_id.items()}
@@ -27,15 +26,16 @@ class ProcessDataSymbolic:
         self.embedding_matrix = np.random.randn(self.n_classes, self.embedding_dim).astype(np.float32)
 
     # ================= FORWARD OPERATIONS ======================
-    def load_symbolic(self, img_name: str = None):
+    def load_symbolic(self, img_name: str = None, visualize:bool=False):
         if not os.path.exists(self.folder_path):
             raise FileNotFoundError(f"Folder not found: {self.folder_path}")
         img_path = os.path.join(self.folder_path, img_name)
         with open(img_path, 'r') as f:
             lines = [line.rstrip('\n') for line in f]
         self.lines = lines
-        for row in lines:
-            print(row)
+        if visualize:
+            for row in lines:
+                print(row)
         return lines
 
     def crop_symbolic(self):
@@ -102,7 +102,11 @@ class ProcessDataSymbolic:
         return id_file, symb_file
 
     # ================= VISUALIZATION ======================
-    def render_level_image(self, symb_name: str, symb_file: list, tile_dir: str, save_folder: str = None) -> Image.Image:
+    def render_level_image(self, symb_name: str, 
+                           symb_file: list, 
+                           tile_dir: str, 
+                           save_folder: str = None,
+                           visualize:bool = False) -> Image.Image:
         level_name = os.path.splitext(symb_name)[0] + ".png"
 
         id_file = self.convert_to_identity(symb_file)
@@ -150,8 +154,16 @@ class ProcessDataSymbolic:
         if save_folder:
             os.makedirs(save_folder, exist_ok=True)
             full_img.save(os.path.join(save_folder, level_name))
+        if visualize:
+            full_img.show()
 
         return full_img
+    # ========================= CREATE FULL COLLECTION OF PATCHES=======
+                
+
+
+
+    # ==================================================================
 
     @staticmethod
     def visualize_file(file=None):
@@ -171,13 +183,12 @@ if __name__ == "__main__":
     symb_test = files[0]  # e.g., "mario_1_1.txt"
     print(f"Rendering: {symb_test}")
 
-    processor = ProcessDataSymbolic(mapping_path=mapping_path)
+    processor = ProcessDataSymbolic(embedding_dim=32,mapping_path=mapping_path)
     symb_file = processor.load_symbolic(symb_test)
     patches = processor.crop_symbolic()
     print(f"Number of patches for given file: {len(patches)}")
 
-    rendered_img = processor.render_level_image(symb_test, symb_file, tile_dir, save_folder)
-    rendered_img.show()
+    rendered_img = processor.render_level_image(symb_test, symb_file, tile_dir, save_folder,visualize=False)
 
 
     #for i, patch in enumerate(patches[:n_patches]):

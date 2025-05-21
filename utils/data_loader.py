@@ -4,34 +4,34 @@ import numpy as np
 import re
 import random
 from torch.utils.data import Dataset, DataLoader
-from utils.process_data import ProcessDataSymbolic  # assumes this file is called process_data.py
+from process_data import ProcessDataSymbolic  # Adjust import if needed
+from load_files import load_config
 
 
-# read the files in the correct level game order
+# Natural sorting for file names like "mario_1_1.txt"
 def sort_files(text):
     return [int(chunk) if chunk.isdigit() else chunk.lower() for chunk in re.split(r'(\d+)', text)]
 
+
 class MarioLevelDataset(Dataset):
-    def __init__(self, patches, processor, num_classes=10):
+    def __init__(self, patches, processor):
         """
         Args:
             patches (list): symbolic patches from processor.crop_symbolic()
             processor (ProcessDataSymbolic): processor object for forward mapping
-            num_classes (int): number of tile types
         """
         self.processor = processor
         self.patches = patches
-        self.num_classes = num_classes
         self.data = self._build_dataset()
 
-    def _build_dataset(self):
-        all_tensors = []
+    def _build_dataset(self): # function to build the dataset using the symbolic patches
+        all_vectors = []
         for patch in self.patches:
-            _, vector = self.processor.forward_mapping(patch)  # shape: (H, W, C)
-            vector = vector.astype('float32')
-            vector = np.transpose(vector, (2, 0, 1))  # (C, H, W)
-            all_tensors.append(torch.tensor(vector))
-        return all_tensors
+            _, vector = self.processor.forward_mapping(patch)  # (H, W, D)
+            vector = vector.astype(np.float32)
+            vector = np.transpose(vector, (2, 0, 1))  # Convert to (C, H, W)
+            all_vectors.append(torch.tensor(vector))
+        return all_vectors
 
     def __len__(self):
         return len(self.data)
@@ -41,32 +41,44 @@ class MarioLevelDataset(Dataset):
 
 
 if __name__ == "__main__":
-    # Config paths (adjust if needed)
     root_dir = os.path.dirname(__file__)
-    config_path = os.path.abspath(os.path.join(os.path.dirname(__file__),"..", 'config.yaml'))
-    mapping_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mapping.yaml'))
-    symb_folder =  symb_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'symbol'))
+    mapping_path = os.path.abspath(os.path.join(root_dir, 'mapping.yaml'))
+    config_path = os.path.abspath(os.path.join(root_dir,".." ,'config.yaml'))
+    symb_folder = os.path.abspath(os.path.join(root_dir, '..', 'data', 'symbol'))
     files = sorted(os.listdir(symb_folder), key=sort_files)
 
-    
-    all_patches  = []
-    
-    processor = ProcessDataSymbolic(config_path=config_path, mapping_path=mapping_path) # Initialize processing class
-    # Iterate over one level
+    config_file = load_config(config_path=config_path)   #Load config file
 
-    test_level = random.choice(files)
-    print(f"Processing leve: {test_level}")
-    processor.load_symbolic(test_level) # Load the level
-    patches = processor.crop_symbolic() # Obtain level patches
-    print(f"  Extracted {len(patches)} patches")
-    dataset = MarioLevelDataset(patches = patches,processor=processor)
-    dataloader = DataLoader(dataset,batch_size=4,shuffle=True) # Create dataloader
 
-    # Iterate over data loader
+    #======== DATALOADER PARAMETERS ================================
+    embedding_dim = config_file["train"]["embedding_dim"] # embedding dimension for each patch
+    batch_size = config_file["train"]["batch_size"] # batch size
+
+    #================================================================
+
+    processor = ProcessDataSymbolic(embedding_dim=embedding_dim,mapping_path=mapping_path) #Initalize the processor
+
+    test_level = random.choice(files)   # Select and process one random level file
+    print(f"Processing level", {test_level})
+    symb_file = processor.load_symbolic(test_level,visualize=False) # Load symbolic file
+    patches = processor.crop_symbolic() # Obtain patches of symbolic files
+
+    # Dataset and DataLoader
+    dataset = MarioLevelDataset(patches=patches, processor=processor)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True) # make it an iterable dataloader
+    print(f"\n Dataset contains {len(dataset)} samples.")
+
+    # Iterate through DataLoader
     for batch_idx, batch in enumerate(dataloader):
-        print(f"\nBatch {batch_idx} — Shape: {batch.shape}") # (B, C, H, W)
-        print(f"First sample (channel 0):\n{batch[0][0]}")
-        if batch_idx==1:
-            break
+        b,c,h,w = batch.shape
+        try:
+            assert b==batch_size
+        except AssertionError:
+            print(f"[WARNING] Batch {batch_idx} has unexpected batch size: {b} (expected {batch_size})")
 
+        print(f"\nBatch {batch_idx} — Shape: {batch.shape}")  # (B, C, H, W)
+        #print(f"First sample (channel 0):\n{batch[0][0]}")
+
+        if batch_idx == 1:
+            break
 

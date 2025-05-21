@@ -27,7 +27,6 @@ output/*/
 Thumbs.db
 
 # Output images and temporary files
-*.png
 *.jpg
 *.jpeg
 *.tmp

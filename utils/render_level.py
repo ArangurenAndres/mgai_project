@@ -8,9 +8,6 @@ def run_render(processor, symb_name:str=None, save_folder:str=None ,symb_file: l
     rendered_img.show()
 
 
-
-
-
 if __name__ == "__main__":
     # use this paths if cloning the repo else specify your own absolute or relative paths : )
     mapping_path = os.path.abspath(os.path.join(os.path.dirname(__file__), 'mapping.yaml'))
