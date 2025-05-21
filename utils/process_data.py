@@ -1,7 +1,7 @@
 import numpy as np
 import os
 from PIL import Image
-from load_files import load_mapping
+from .load_files import load_mapping
 
 class ProcessDataSymbolic:
     def __init__(self, mapping_path: str = None):
