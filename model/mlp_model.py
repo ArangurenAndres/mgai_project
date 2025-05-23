@@ -85,7 +85,8 @@ class MLPGenerator(nn.Module):
             
         # Convert the  whole level vector back to symbolic format
         print("Converting stitched level to symbolic format...")
-        id_level = processor.convert_vector_to_id(full_level)
+        decoded_full_level = processor.decode_from_embeddings(full_level)
+        id_level = processor.convert_to_identity(decoded_full_level)
         symbolic_level = processor.convert_identity_to_symbolic(id_level)
             
             

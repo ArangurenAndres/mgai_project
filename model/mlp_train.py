@@ -35,7 +35,7 @@ class MarioLevelDataset(Dataset):
         return self.level_patches[idx] # Returns the level patch at the given index
 
 
-def train(generator, dataloader, num_epochs=10, lr=0.0002, device='cpu'):
+def train_mlp(generator, dataloader, num_epochs=100, lr=0.0002, device='cpu'):
     # Train the generator using binary cross entropy loss
     generator.to(device) # Move generator to specified device
     
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     
     # Create and train generator
     generator = MLPGenerator(level_height, level_width, n_tile_types)
-    trained_generator, training_losses = train(generator, dataloader)
+    trained_generator, training_losses = train_mlp(generator, dataloader)
     
     # Save the trained model
     model_save_path = os.path.join(os.path.dirname(__file__), 'mlp_mario_generator.pth')
