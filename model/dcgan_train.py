@@ -17,7 +17,7 @@ from utils.process_data import ProcessDataSymbolic
 
 class MarioLevelDataset(Dataset):
     def __init__(self, level_patches):
-        # List of level patches in one-hot encoded format
+        # Convert to tensors and permute to (C, H, W) format
         self.level_patches = [torch.clamp(torch.tensor(patch, dtype=torch.float32), 0, 1).permute(2, 0, 1) for patch in level_patches]
         
     def __len__(self):
@@ -26,7 +26,7 @@ class MarioLevelDataset(Dataset):
     def __getitem__(self, index):
         return self.level_patches[index] # Level patch at the given index
 
-def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, device='cpu'):
+def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, device='cpu', patience=5, min_delta=0.001):
     generator.to(device)
     discriminator.to(device)
 
@@ -40,6 +40,11 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
     # Lists to store the losses of each epoch
     g_losses = []
     d_losses = []
+    
+    # Early stopping variables
+    best_g_loss = float('inf')
+    epochs_plateu = 0
+    best_epoch = 0
 
     for epoch in range(num_epochs):
         current_g_loss = 0.0
@@ -49,44 +54,46 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
         for i, real_data in enumerate(dataloader):
             batch_size = real_data.size(0)
             real_data = real_data.to(device)
-
-            # Train Discriminator
-            discriminator.zero_grad()
-            labels = torch.full((batch_size,), real_label, dtype=torch.float, device=device)
-            raw_output = discriminator(real_data) # Pass real data through the discriminator
-            output = raw_output[:, 0] if raw_output.dim() > 1 and raw_output.size(1) > 1 else raw_output
             
-            # Calculate the loss for real data
-            loss_d_real = criterion(output, labels) 
-            loss_d_real.backward()
-
-            # Generate random noise for the generator input
-            z = torch.randn(batch_size, generator.latent_dim, device=device)
-            if len(z.shape) == 2:  # Add spatial dimensions if needed for ConvTranspose2d
-                z = z.unsqueeze(-1).unsqueeze(-1)
+            if i % 2 == 0:
+                # Train Discriminator
+                discriminator.zero_grad()
                 
-            fake_data = generator(z) # Generate fake data
-            labels.fill_(fake_label)
-            
-            # Get discriminator output on fake data
-            raw_output = discriminator(fake_data.detach())
-            output = raw_output[:, 0] if raw_output.dim() > 1 and raw_output.size(1) > 1 else raw_output
-            
-            # Calculate the loss for fake data
-            loss_d_fake = criterion(output, labels)
-            loss_d_fake.backward()
-            optimizer_d.step()
+                # Real data
+                labels = torch.full((batch_size,), real_label, dtype=torch.float, device=device)
+                output = discriminator(real_data)
+                
+                # Calculate the loss for real data
+                loss_d_real = criterion(output, labels) 
+                loss_d_real.backward()
 
-            # Combine the two losses to update the discriminator
-            loss_d = loss_d_real + loss_d_fake
+                # Generate random noise for the generator input
+                z = torch.randn(batch_size, generator.latent_dim, device=device)
+                fake_data = generator(z) # Generate fake data
+                labels.fill_(fake_label)
+                
+                # Get discriminator output on fake data
+                output = discriminator(fake_data.detach())
+                
+                # Calculate the loss for fake data
+                loss_d_fake = criterion(output, labels)
+                loss_d_fake.backward()
+                optimizer_d.step()
+
+                # Combine the two losses to update the discriminator
+                loss_d = loss_d_real + loss_d_fake
+            else:
+                # Skip discriminator training but still generate fake data
+                z = torch.randn(batch_size, generator.latent_dim, device=device)
+                fake_data = generator(z)
+                loss_d = torch.tensor(0.0)
 
             # Train Generator
             generator.zero_grad()
             labels.fill_(real_label)
             
             # Get discriminator output on fake data again (for generator training)
-            raw_output = discriminator(fake_data)
-            output = raw_output[:, 0] if raw_output.dim() > 1 and raw_output.size(1) > 1 else raw_output
+            output = discriminator(fake_data)
             
             # Calculate the loss based on how well the generator fools the discriminator
             loss_g = criterion(output, labels)
@@ -95,7 +102,7 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
 
             # Add up losses for current epoch
             current_g_loss += loss_g.item()
-            current_d_loss += loss_d.item()
+            current_d_loss += loss_d.item() if isinstance(loss_d, torch.Tensor) else loss_d
             num_batches += 1
 
         # Calculate avg loss per epoch
@@ -104,24 +111,33 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
         
         g_losses.append(avg_g_loss)
         d_losses.append(avg_d_loss)
-        print(f"Epoch [{epoch+1}/{num_epochs}] - Avg Loss D: {avg_d_loss:.4f}, Avg Loss G: {avg_g_loss:.4f}")
-
+        
+        # Early stopping check
+        if avg_g_loss < best_g_loss - min_delta:
+            best_g_loss = avg_g_loss
+            epochs_plateu = 0
+            best_epoch = epoch + 1
+            print(f"Epoch [{epoch+1}/{num_epochs}] - Avg Loss D: {avg_d_loss:.4f}, Avg Loss G: {avg_g_loss:.4f}")
+        else:
+            epochs_plateu += 1
+            print(f"Epoch [{epoch+1}/{num_epochs}] - Avg Loss D: {avg_d_loss:.4f}, Avg Loss G: {avg_g_loss:.4f} (No improvement: {epochs_plateu}/{patience})")
+            
+        # Check if we should stop early
+        if epochs_plateu >= patience:
+            print(f"\nEarly stopping triggered!")
+            print(f"No improvement in generator loss for {patience} epochs.")
+            print(f"Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
+            break
+        
+    # # Final summary
+    # if epochs_plateu < patience:
+    #     print(f"\nTraining completed all {num_epochs} epochs.")
+    #     print(f"Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
+            
+    print(f"\nTraining completed. Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
     return generator, g_losses, d_losses
 
 def generate_whole_level(generator, processor, num_patches_width=7, num_patches_height=14, device='cpu'):
-    """
-    Generate a whole level by creating multiple patches using the DCGAN generator and stitching them together.
-    
-    Args:
-        generator: The trained DCGAN generator
-        processor: ProcessDataSymbolic instance for processing patches
-        num_patches_width: Number of patches to generate horizontally
-        num_patches_height: Number of patches to generate vertically
-        device: Device to use for generation (CPU/GPU)
-    
-    Returns:
-        symbolic_level: The complete level in symbolic format
-    """
     generator.eval()  # Set to evaluation mode
     symbolic_level = []
     
@@ -133,8 +149,6 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
             for w in range(num_patches_width):
                 # Generate a random noise vector
                 z = torch.randn(1, generator.latent_dim, device=device)
-                if len(z.shape) == 2:  # Add spatial dimensions if needed
-                    z = z.unsqueeze(-1).unsqueeze(-1)
                 
                 # Generate a patch
                 generated_patch = generator(z)
@@ -142,10 +156,9 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
                 # Convert from tensor to numpy and reshape
                 patch_np = generated_patch.squeeze(0).permute(1, 2, 0).cpu().numpy()
                 
-                # Find the most likely tile type for each position (one-hot to symbolic)
-                symbolic_patch = processor.backward_mapping(patch_np)
+                # Convert to symbolic
+                symbolic_patch = processor.backward_mapping_onehot(patch_np)
                 
-                # Extract the string representation from the result (second element of tuple)
                 if isinstance(symbolic_patch, tuple):
                     symbolic_patch = symbolic_patch[1]  # Get the SECOND element (strings) if it's a tuple
                 
@@ -185,30 +198,24 @@ if __name__ == "__main__":
         processor.load_symbolic(symb_file)
         patches = processor.crop_symbolic()
         for patch in patches:
-            _, vector_file = processor.forward_mapping(patch)
+            _, onehot_file = processor.forward_mapping_onehot(patch)
+            all_one_hot_patches.append(onehot_file)
             
-            # Remove the padding logic to keep original dimensions (14x28)
-            all_one_hot_patches.append(vector_file)
-            
-        print(f"Finished processing {len(all_one_hot_patches)} patches.")
+    print(f"Finished processing {len(all_one_hot_patches)} patches.")
     
     # Create a dataset and dataloader for training
     dataset = MarioLevelDataset(all_one_hot_patches)
     dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
     
     # Get the dimensions from the one-hot patches
-    # Note: after permute in the dataset, the shape is (C, H, W)
     sample = dataset[0]
+    print(sample)
     n_tile_types = sample.size(0)
-    patch_height = sample.size(1)  # Height is dimension 1 after permute
-    patch_width = sample.size(2)   # Width is dimension 2 after permute
+    patch_height = sample.size(1) 
+    patch_width = sample.size(2)  
     
     print(f"Patch dimensions: {patch_height}x{patch_width} with {n_tile_types} tile types")
-
-    # # Extract the level height and with (16 x 28) and the number of tile types (10)
-    # level_height, level_width = all_one_hot_patches[0].shape[:2]
-    # n_tile_types = all_one_hot_patches[0].shape[2]
-
+    
     # Create instances of the generator and discriminator
     generator = DCGANGenerator(latent_dim=100, n_tile_types=n_tile_types, 
                                patch_height=patch_height, patch_width=patch_width)
@@ -216,8 +223,9 @@ if __name__ == "__main__":
                                      patch_height=patch_height, patch_width=patch_width)
 
     # Train the generator
-    trained_generator, g_losses, d_losses = train_dcgan(generator, discriminator, dataloader)
+    trained_generator, g_losses, d_losses = train_dcgan(generator, discriminator, dataloader, num_epochs=100, lr=0.0001, device=device, patience=5, min_delta=0.005)
 
+    
     # Save the trained generator
     model_save_path = os.path.join(os.path.dirname(__file__), 'dcgan_mario_generator.pth')
     torch.save(trained_generator.state_dict(), model_save_path)
@@ -232,14 +240,11 @@ if __name__ == "__main__":
     plt.title('DCGAN Training Loss per Epoch')
     plt.legend()
     plt.grid(True)
-    plt.xticks(range(1, len(g_losses) + 1, max(1, len(g_losses) // 10))) # Show ticks for roughly every 10% of epochs
     plt.tight_layout()
     
     # Create output directory for plots and generated levels
     output_dir = os.path.join(os.path.dirname(__file__), 'generated_patches')
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Save the plot with a timestamp
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     plot_path = os.path.join(output_dir, f'dcgan_training_loss_{timestamp}.png')
     plt.savefig(plot_path)
@@ -248,14 +253,12 @@ if __name__ == "__main__":
     
     print("\nGenerating a complete level using the trained DCGAN generator...")
     level_width = 7  # Number of patches horizontally
-    level_height = 3  # Number of patches vertically
+    level_height = 1
     symbolic_level = generate_whole_level(trained_generator, processor, level_width, level_height, device)
 
     # Create output directory for the generated levels
     levels_output_dir = os.path.join(os.path.dirname(__file__), 'generated_levels')
     os.makedirs(levels_output_dir, exist_ok=True)
-
-    # Save the generated level with timestamp
     level_timestamp = time.strftime("%Y%m%d-%H%M%S")
     level_output_file = os.path.join(levels_output_dir, f'dcgan_level_{level_timestamp}.txt')
 

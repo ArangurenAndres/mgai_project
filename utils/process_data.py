@@ -64,6 +64,20 @@ class ProcessDataSymbolic:
         h, w = id_array.shape
         embedded = self.embedding_matrix[id_array]  # (H, W, D)
         return embedded
+    
+    def convert_id_to_onehot(self, id_file: list) -> np.ndarray:
+        """Convert ID file to one-hot encoding instead of embeddings"""
+        id_array = np.array(id_file)
+        h, w = id_array.shape
+        
+        # Create one-hot encoding
+        one_hot = np.zeros((h, w, self.n_classes))
+        for i in range(h):
+            for j in range(w):
+                if 0 <= id_array[i, j] < self.n_classes:
+                    one_hot[i, j, id_array[i, j]] = 1.0
+    
+        return one_hot
 
     # ================= BACKWARD OPERATIONS ======================
     def decode_from_embeddings(self, vector_grid: np.ndarray) -> list:
@@ -100,6 +114,25 @@ class ProcessDataSymbolic:
         print("Symbolic file matches original.")
 
         return id_file, symb_file
+    
+    def forward_mapping_onehot(self, symb_file: list) -> tuple:
+        """Forward mapping using one-hot encoding instead of embeddings"""
+        id_file = self.convert_to_identity(symb_file)
+        onehot_file = self.convert_id_to_onehot(id_file)
+        return id_file, onehot_file
+    
+    def backward_mapping_onehot(self, onehot_file: np.ndarray) -> tuple:
+        """Convert one-hot encoded file back to symbolic representation"""
+        # Convert one-hot to IDs by taking argmax
+        id_file = np.argmax(onehot_file, axis=-1)
+        
+        # Convert IDs to symbolic
+        symbolic_file = []
+        for row in id_file:
+            symbolic_row = ''.join([self.id_to_symbol.get(id_val, '?') for id_val in row])
+            symbolic_file.append(symbolic_row)
+        
+        return id_file.tolist(), symbolic_file
 
     # ================= VISUALIZATION ======================
     def render_level_image(self, symb_name: str, symb_file: list, tile_dir: str, save_folder: str = None) -> Image.Image:
