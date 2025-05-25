@@ -26,16 +26,24 @@ class MarioLevelDataset(Dataset):
     def __getitem__(self, index):
         return self.level_patches[index] # Level patch at the given index
 
-def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, device='cpu', patience=5, min_delta=0.001):
+def train_dcgan(generator, discriminator, dataloader, num_epochs=50, lr_g=0.0005, lr_d=0.0001, device='cpu', patience=10, min_delta=0.01, noise_std=0.02, d_train_freq=2, g_train_freq=1):
     generator.to(device)
     discriminator.to(device)
 
     criterion = nn.BCELoss() # BCE is used to measure how well the discriminator distinguishes the real and fake data
-    optimizer_g = optim.Adam(generator.parameters(), lr=lr, betas=(0.5, 0.999))
-    optimizer_d = optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
+    optimizer_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
+    optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
+    
+    # LR Scheduler to reduce learning rate as training progresses
+    scheduler_g = optim.lr_scheduler.StepLR(optimizer_g, step_size=10, gamma=0.8)
+    scheduler_d = optim.lr_scheduler.StepLR(optimizer_d, step_size=10, gamma=0.8)
 
-    real_label = 1.0 # Real mario level patches
-    fake_label = 0.0 # Fake (generated) mario level patches
+    # At the end of each epoch
+    scheduler_g.step()
+    scheduler_d.step()
+
+    real_label = 0.9 # Real mario level patches
+    fake_label = 0.1 # Fake (generated) mario level patches
 
     # Lists to store the losses of each epoch
     g_losses = []
@@ -54,28 +62,27 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
         for i, real_data in enumerate(dataloader):
             batch_size = real_data.size(0)
             real_data = real_data.to(device)
-            
-            if i % 2 == 0:
-                # Train Discriminator
+
+            # Add noise to real data if specified
+            if noise_std > 0:
+                noise = torch.randn_like(real_data) * noise_std
+                real_data = torch.clamp(real_data + noise, 0, 1)
+
+            # Train Discriminator
+            if i % d_train_freq == 0:
                 discriminator.zero_grad()
-                
+
                 # Real data
                 labels = torch.full((batch_size,), real_label, dtype=torch.float, device=device)
                 output = discriminator(real_data)
-                
-                # Calculate the loss for real data
-                loss_d_real = criterion(output, labels) 
+                loss_d_real = criterion(output, labels)
                 loss_d_real.backward()
 
-                # Generate random noise for the generator input
+                # Fake data
                 z = torch.randn(batch_size, generator.latent_dim, device=device)
-                fake_data = generator(z) # Generate fake data
+                fake_data = generator(z)
                 labels.fill_(fake_label)
-                
-                # Get discriminator output on fake data
                 output = discriminator(fake_data.detach())
-                
-                # Calculate the loss for fake data
                 loss_d_fake = criterion(output, labels)
                 loss_d_fake.backward()
                 optimizer_d.step()
@@ -84,24 +91,29 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=10, lr=0.0002, 
                 loss_d = loss_d_real + loss_d_fake
             else:
                 # Skip discriminator training but still generate fake data
-                z = torch.randn(batch_size, generator.latent_dim, device=device)
+                z = torch.randn(batch_size, generator.latent_dim, device=device) + torch.randn_like(z) * 0.05
                 fake_data = generator(z)
                 loss_d = torch.tensor(0.0)
 
             # Train Generator
-            generator.zero_grad()
-            labels.fill_(real_label)
-            
-            # Get discriminator output on fake data again (for generator training)
-            output = discriminator(fake_data)
-            
-            # Calculate the loss based on how well the generator fools the discriminator
-            loss_g = criterion(output, labels)
-            loss_g.backward()
-            optimizer_g.step()
+            if i % g_train_freq == 0:
+                generator.zero_grad()
+                labels.fill_(real_label)
+
+                # Get discriminator output on fake data again (for generator training)
+                output = discriminator(fake_data)
+
+                # Calculate the loss based on how well the generator fools the discriminator
+                loss_g = criterion(output, labels)
+                div_loss = diversity_loss(fake_data)
+                total_g_loss = loss_g + div_loss
+                total_g_loss.backward()
+                optimizer_g.step()
+            else:
+                loss_g = torch.tensor(0.0)
 
             # Add up losses for current epoch
-            current_g_loss += loss_g.item()
+            current_g_loss += loss_g.item() if isinstance(loss_g, torch.Tensor) else loss_g
             current_d_loss += loss_d.item() if isinstance(loss_d, torch.Tensor) else loss_d
             num_batches += 1
 
@@ -173,6 +185,17 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
     
     return symbolic_level
 
+def diversity_loss(generated_batch):
+    batch_size = generated_batch.size(0)
+    generated_flat = generated_batch.view(batch_size, -1)
+    
+    # Calculate pairwise distances
+    distances = torch.cdist(generated_flat, generated_flat)
+    
+    # Encourage larger distaances (more diversity)
+    diversity_loss = -torch.mean(distances)
+    
+    return diversity_loss * 0.1
 
 if __name__ == "__main__":
     # Set device
@@ -217,13 +240,18 @@ if __name__ == "__main__":
     print(f"Patch dimensions: {patch_height}x{patch_width} with {n_tile_types} tile types")
     
     # Create instances of the generator and discriminator
-    generator = DCGANGenerator(latent_dim=100, n_tile_types=n_tile_types, 
+    generator = DCGANGenerator(latent_dim=128, n_tile_types=n_tile_types, 
                                patch_height=patch_height, patch_width=patch_width)
     discriminator = DCGANDiscriminator(n_tile_types=n_tile_types, 
                                      patch_height=patch_height, patch_width=patch_width)
 
     # Train the generator
-    trained_generator, g_losses, d_losses = train_dcgan(generator, discriminator, dataloader, num_epochs=100, lr=0.0001, device=device, patience=5, min_delta=0.005)
+    trained_generator, g_losses, d_losses = train_dcgan(
+        generator, discriminator, dataloader, 
+        num_epochs=100, lr_g=0.0006, lr_d=0.00008, device=device, 
+        patience=15, min_delta=0.005, noise_std=0.02,
+        d_train_freq=3, g_train_freq=1
+    )
 
     
     # Save the trained generator
@@ -271,4 +299,15 @@ if __name__ == "__main__":
     # Display the generated level
     print("\nGenerated level after training:")
     processor.visualize_file(symbolic_level)
+     
+    # Render the level using run_render()
+    tile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'tiles'))  # Path to tiles
+    rendered_img = processor.render_level_image(
+        symb_name=f"dcgan_level_{level_timestamp}.txt",
+        symb_file=symbolic_level,
+        tile_dir=tile_dir,
+        save_folder=levels_output_dir
+    )
     
+    # Display the rendered image
+    rendered_img.show()
