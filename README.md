@@ -1,41 +1,22 @@
-# MGAI project
+# MGAI Project
 
-
-## Create requirements.txt file 
-
-
-
-
-# From the root of your project directory:
-
-
-
-```sh
-pip install pipreqs
-
-pipreqs . --force
-
-
-
-```
-
-
+This project focuses on using modern game AI algorithms to generate and play Super Mario levels. It involves implementing GAN and Diffusion models for level generation and training an agent to autonomously play the game.
 
 ## Setup
 
 You can set up the Python environment and install dependencies using the following commands:
 
 1. For Unix/Linux/MacOS:
-```sh
-chmod +x setup.sh
-./setup.sh
-```
+    ```sh
+    chmod +x setup.sh
+    ./setup.sh
+    ```
 
 2. For Windows:
-Either double-click the `setup.bat` file or run it from the command prompt:
-```cmd
-setup.bat
-```
+    Either double-click the `setup.bat` file or run it from the command prompt:
+    ```cmd
+    setup.bat
+    ```
 
 Alternatively, you can run these commands manually:
 ```powershell
@@ -45,37 +26,59 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-2. If you are a collaborator in this project before doing any modifications create a new branch and checkout :) merci 
+If you are a collaborator in this project, please create a new branch and checkout before making any modifications. Merci!
 
+## Project Overview
 
-## Project
+The project is divided into two main tasks:
 
-The following project is divided in two main taks:
+1. **Level Generation**: Implement GAN and Diffusion models to create realistic Super Mario levels.
+2. **Autonomous Agent**: Train an agent to autonomously play the game without prior knowledge.
 
-1. Implement GAN and Diffusion models to create realistic Super Mario levels 
+## Level Generation
 
-2. Train agent to autonomously play the game without previous knowledge
+### Models
 
+1. **MLP Model**: Use a simple MLP model to generate Super Mario levels. 
+    - `mlp_model.py`: The model architecture for the MLP.
+    - `mlp_train.py`: Simply run this training file in order to generate MLP .txt levels.
 
-## Level generation
+2. **GAN Model**: Uses a DCGAN model to generate Super Mario levels.
+    - `dcgan_model.py`: The model architecture for the DCGAN.
+    - `dcgan_train.py`: Simply run this training file in order to generate DCGAN .txt levels. 
+    - `dcgan_ablation.py`: This is the file used to run the ablation study. 
 
-### utils folder
+    The generated .txt files are stored under the `/generated_levels` folder.
+    The ablation results are stored under the `/ablation_results` folder.
 
-1. process_data.py  (Forward and backward functions to apply the following data transformations)
+- **Diffusion Models**: Implement diffusion-based models for level generation (future work).
 
-- (Forward) symbolic.txt --> identity (integers) --> embedding 
-- (Backward) embedding --> identity (integers) --> symbolic.txt 
+### Level Rendering
 
-**These functions will be mainly implemented in model training using patch**
+1. **generate_levels.py**: This file renders the .txt levels into .png files and stores them under the `/generated_levels` folder. 
 
-2. render_level.py (Use this function if you want to map a txt to rendered png using the corresponding tiles (An))
+### Utils Folder
 
+1. **process_data.py**: Contains forward and backward functions for data transformations.
+    - Forward: `symbolic.txt` → identity (integers) → embedding
+    - Backward: embedding → identity (integers) → `symbolic.txt`
+
+    These functions are mainly used in model training with patches.
+
+## Agent for Autonomous Playing
+
+The agent is designed to play both real and generated levels autonomously. The training involves reinforcement learning techniques to improve the agent's performance over time.
+
+## Requirements
+
+To generate a `requirements.txt` file, use the following commands from the root of your project directory:
 ```sh
-run_render(processor,symb_file=symb_file, symb_name=symb_test, save_folder=save_folder)
-
+pip install pipreqs
+pipreqs . --force
 ```
 
+## Contributing
+
+We welcome contributions to this project. Please ensure that you follow the setup instructions and create a new branch for your changes. For major changes, please open an issue first to discuss what you would like to change.
 
 
-
-## Agent for autonomous playing both real and generated levels
