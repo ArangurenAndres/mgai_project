@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class DCGANGenerator(nn.Module):
-    def __init__(self, latent_dim, n_tile_types, patch_height=14, patch_width=28):
+    def __init__(self, latent_dim, n_tile_types, patch_height=14, patch_width=28, hidden_dim=512):
         super(DCGANGenerator, self).__init__()
         self.latent_dim = latent_dim
         self.n_tile_types = n_tile_types
@@ -10,18 +10,31 @@ class DCGANGenerator(nn.Module):
         self.patch_width = patch_width
         
         self.fc = nn.Sequential(
-            nn.Linear(latent_dim, 128),
+            nn.Linear(latent_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
             nn.ReLU(True),
-            nn.Linear(128, 256),
+            nn.Dropout(0.2),
+            
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.BatchNorm1d(hidden_dim * 2),
             nn.ReLU(True),
-            nn.Linear(256, 64*7*14), # 64 channels, 7 x 14 feature map
+            nn.Dropout(0.2),
+            
+            nn.Linear(hidden_dim * 2, 128 * 7 * 14),  # Increased channels
+            nn.BatchNorm1d(128 * 7 * 14),
             nn.ReLU(True)
         )
         
         # Simple upsampling to get exact size
         self.conv = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(True),
+            
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+            
             nn.Conv2d(32, n_tile_types, kernel_size=3, padding=1),
             nn.Sigmoid()
         )
@@ -35,7 +48,7 @@ class DCGANGenerator(nn.Module):
         x = self.fc(z)
         
         # Reshpe to feature maps
-        x = x.view(-1, 64, 7, 14)
+        x = x.view(-1, 128, 7, 14)
         
         # Pass through conv layers
         x = self.conv(x)
@@ -87,15 +100,24 @@ class DCGANDiscriminator(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(n_tile_types, 32, kernel_size=3, stride=2, padding=1),
             nn.LeakyReLU(0.2),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1), 
-            nn.LeakyReLU(0,2),
+            nn.Dropout2d(0.25),
+            
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+            nn.Dropout2d(0.25),
+            
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
         )
         
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 4 * 7, 128),
+            nn.Linear(128 * 4 * 7, 256),
             nn.LeakyReLU(0.2),
-            nn.Linear(128, 1),
+            nn.Dropout(0.5),
+            nn.Linear(256, 1),
             nn.Sigmoid()
         )
         

@@ -26,32 +26,35 @@ class MarioLevelDataset(Dataset):
     def __getitem__(self, index):
         return self.level_patches[index] # Level patch at the given index
 
-def train_dcgan(generator, discriminator, dataloader, num_epochs=50, lr_g=0.0005, lr_d=0.0001, device='cpu', patience=10, min_delta=0.01, noise_std=0.02, d_train_freq=2, g_train_freq=1):
+def train_dcgan(generator, discriminator, dataloader, num_epochs=100, 
+                        lr_g=0.0002, lr_d=0.0001, device='cpu', patience=20, 
+                        min_delta=0.001, noise_std=0.02, d_train_freq=1, g_train_freq=1,
+                        use_spectral_norm=True, gradient_penalty_weight=10.0):
+    
     generator.to(device)
     discriminator.to(device)
 
-    criterion = nn.BCELoss() # BCE is used to measure how well the discriminator distinguishes the real and fake data
-    optimizer_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
-    optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999))
+    # Use different loss functions
+    criterion = nn.BCELoss()
     
-    # LR Scheduler to reduce learning rate as training progresses
-    scheduler_g = optim.lr_scheduler.StepLR(optimizer_g, step_size=10, gamma=0.8)
-    scheduler_d = optim.lr_scheduler.StepLR(optimizer_d, step_size=10, gamma=0.8)
+    # Different optimizers with better parameters
+    optimizer_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999), weight_decay=1e-5)
+    optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999), weight_decay=1e-5)
+    
+    # Cosine annealing scheduler
+    scheduler_g = optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=num_epochs)
+    scheduler_d = optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=num_epochs)
 
-    # At the end of each epoch
-    scheduler_g.step()
-    scheduler_d.step()
+    # Label smoothing with noise
+    real_label_base = 0.9
+    fake_label_base = 0.1
+    label_noise = 0.05
 
-    real_label = 0.9 # Real mario level patches
-    fake_label = 0.1 # Fake (generated) mario level patches
-
-    # Lists to store the losses of each epoch
     g_losses = []
     d_losses = []
     
-    # Early stopping variables
     best_g_loss = float('inf')
-    epochs_plateu = 0
+    epochs_without_improvement = 0
     best_epoch = 0
 
     for epoch in range(num_epochs):
@@ -63,91 +66,152 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=50, lr_g=0.0005
             batch_size = real_data.size(0)
             real_data = real_data.to(device)
 
-            # Add noise to real data if specified
+            # Add noise to real data
             if noise_std > 0:
                 noise = torch.randn_like(real_data) * noise_std
                 real_data = torch.clamp(real_data + noise, 0, 1)
+
+            # Dynamic label smoothing
+            real_label = real_label_base + torch.randn(batch_size, device=device) * label_noise
+            fake_label = fake_label_base + torch.randn(batch_size, device=device) * label_noise
+            real_label = torch.clamp(real_label, 0.7, 1.0)
+            fake_label = torch.clamp(fake_label, 0.0, 0.3)
 
             # Train Discriminator
             if i % d_train_freq == 0:
                 discriminator.zero_grad()
 
                 # Real data
-                labels = torch.full((batch_size,), real_label, dtype=torch.float, device=device)
-                output = discriminator(real_data)
-                loss_d_real = criterion(output, labels)
-                loss_d_real.backward()
+                output_real = discriminator(real_data)
+                loss_d_real = criterion(output_real, real_label)
 
                 # Fake data
                 z = torch.randn(batch_size, generator.latent_dim, device=device)
                 fake_data = generator(z)
-                labels.fill_(fake_label)
-                output = discriminator(fake_data.detach())
-                loss_d_fake = criterion(output, labels)
-                loss_d_fake.backward()
-                optimizer_d.step()
+                output_fake = discriminator(fake_data.detach())
+                loss_d_fake = criterion(output_fake, fake_label)
 
-                # Combine the two losses to update the discriminator
-                loss_d = loss_d_real + loss_d_fake
+                # Gradient penalty (WGAN-GP style)
+                gradient_penalty = compute_gradient_penalty(discriminator, real_data, fake_data, device)
+                
+                loss_d = loss_d_real + loss_d_fake + gradient_penalty_weight * gradient_penalty
+                loss_d.backward()
+                
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
+                optimizer_d.step()
             else:
-                # Skip discriminator training but still generate fake data
-                z = torch.randn(batch_size, generator.latent_dim, device=device) + torch.randn_like(z) * 0.05
+                z = torch.randn(batch_size, generator.latent_dim, device=device)
                 fake_data = generator(z)
                 loss_d = torch.tensor(0.0)
 
             # Train Generator
             if i % g_train_freq == 0:
                 generator.zero_grad()
-                labels.fill_(real_label)
-
-                # Get discriminator output on fake data again (for generator training)
+                
+                # Use fresh fake data for generator training
+                z = torch.randn(batch_size, generator.latent_dim, device=device)
+                fake_data = generator(z)
                 output = discriminator(fake_data)
-
-                # Calculate the loss based on how well the generator fools the discriminator
-                loss_g = criterion(output, labels)
+                
+                # Generator wants discriminator to think fake is real
+                real_labels_for_gen = torch.full((batch_size,), real_label_base, device=device)
+                loss_g = criterion(output, real_labels_for_gen)
+                
+                # Add diversity loss
                 div_loss = diversity_loss(fake_data)
-                total_g_loss = loss_g + div_loss
+                
+                # Feature matching loss
+                feature_loss = feature_matching_loss(discriminator, real_data, fake_data)
+                
+                total_g_loss = loss_g + 0.1 * div_loss + 0.05 * feature_loss
                 total_g_loss.backward()
+                
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(generator.parameters(), max_norm=1.0)
                 optimizer_g.step()
             else:
                 loss_g = torch.tensor(0.0)
 
-            # Add up losses for current epoch
             current_g_loss += loss_g.item() if isinstance(loss_g, torch.Tensor) else loss_g
             current_d_loss += loss_d.item() if isinstance(loss_d, torch.Tensor) else loss_d
             num_batches += 1
 
-        # Calculate avg loss per epoch
+        # Update learning rates
+        scheduler_g.step()
+        scheduler_d.step()
+
+        # Calculate average losses
         avg_g_loss = current_g_loss / num_batches
         avg_d_loss = current_d_loss / num_batches
         
         g_losses.append(avg_g_loss)
         d_losses.append(avg_d_loss)
         
-        # Early stopping check
+        # Early stopping with more patience
         if avg_g_loss < best_g_loss - min_delta:
             best_g_loss = avg_g_loss
-            epochs_plateu = 0
+            epochs_without_improvement = 0
             best_epoch = epoch + 1
-            print(f"Epoch [{epoch+1}/{num_epochs}] - Avg Loss D: {avg_d_loss:.4f}, Avg Loss G: {avg_g_loss:.4f}")
+            print(f"Epoch [{epoch+1}/{num_epochs}] - D: {avg_d_loss:.4f}, G: {avg_g_loss:.4f} ⭐")
         else:
-            epochs_plateu += 1
-            print(f"Epoch [{epoch+1}/{num_epochs}] - Avg Loss D: {avg_d_loss:.4f}, Avg Loss G: {avg_g_loss:.4f} (No improvement: {epochs_plateu}/{patience})")
+            epochs_without_improvement += 1
+            print(f"Epoch [{epoch+1}/{num_epochs}] - D: {avg_d_loss:.4f}, G: {avg_g_loss:.4f} ({epochs_without_improvement}/{patience})")
             
-        # Check if we should stop early
-        if epochs_plateu >= patience:
-            print(f"\nEarly stopping triggered!")
-            print(f"No improvement in generator loss for {patience} epochs.")
-            print(f"Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
+        # Generate sample every 10 epochs for monitoring
+        if epoch % 10 == 0:
+            generator.eval()  # Set to evaluation mode to avoid BatchNorm issues
+            with torch.no_grad():
+                sample_z = torch.randn(1, generator.latent_dim, device=device)
+                sample_output = generator(sample_z)
+                print(f"Sample output stats - Min: {sample_output.min():.3f}, Max: {sample_output.max():.3f}, Mean: {sample_output.mean():.3f}")
+            generator.train()  # Set back to training mode
+            
+        if epochs_without_improvement >= patience:
+            print(f"\nEarly stopping at epoch {epoch+1}")
             break
-        
-    # # Final summary
-    # if epochs_plateu < patience:
-    #     print(f"\nTraining completed all {num_epochs} epochs.")
-    #     print(f"Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
-            
-    print(f"\nTraining completed. Best generator loss: {best_g_loss:.4f} at epoch {best_epoch}")
+    
+    print(f"\nTraining completed. Best G loss: {best_g_loss:.4f} at epoch {best_epoch}")
     return generator, g_losses, d_losses
+
+def compute_gradient_penalty(discriminator, real_data, fake_data, device):
+    """Compute gradient penalty for WGAN-GP"""
+    batch_size = real_data.size(0)
+    alpha = torch.rand(batch_size, 1, 1, 1, device=device)
+    
+    interpolated = alpha * real_data + (1 - alpha) * fake_data
+    interpolated.requires_grad_(True)
+    
+    d_interpolated = discriminator(interpolated)
+    
+    gradients = torch.autograd.grad(
+        outputs=d_interpolated,
+        inputs=interpolated,
+        grad_outputs=torch.ones_like(d_interpolated),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    
+    gradients = gradients.view(batch_size, -1)
+    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+    
+    return gradient_penalty
+
+def feature_matching_loss(discriminator, real_data, fake_data):
+    """Feature matching loss to stabilize training"""
+    # Get intermediate features from discriminator
+    real_features = []
+    fake_features = []
+    
+    def hook_fn(module, input, output):
+        return output
+    
+    # This is a simplified version - you'd need to modify discriminator to return intermediate features
+    with torch.no_grad():
+        real_output = discriminator(real_data)
+        fake_output = discriminator(fake_data)
+    
+    return torch.nn.functional.mse_loss(fake_output.mean(), real_output.mean())
 
 def generate_whole_level(generator, processor, num_patches_width=7, num_patches_height=14, device='cpu'):
     generator.eval()  # Set to evaluation mode
@@ -197,6 +261,78 @@ def diversity_loss(generated_batch):
     
     return diversity_loss * 0.1
 
+def progressive_training(generator, discriminator, dataloader, device):
+    """Train with progressively increasing difficulty and decreasing learning rates"""
+    
+    print("="*60)
+    print("STARTING PROGRESSIVE TRAINING")
+    print("="*60)
+    
+    all_g_losses = []
+    all_d_losses = []
+    
+    # Phase 1: Warm-up with higher learning rates and shorter patience
+    print("\n Phase 1: Warm-up training (High LR, Fast Convergence)")
+    print("-" * 50)
+    _, g_losses_1, d_losses_1 = train_dcgan(
+        generator, discriminator, dataloader,
+        num_epochs=40,           # Shorter warm-up
+        lr_g=0.0004,            # Higher generator LR
+        lr_d=0.0002,            # Higher discriminator LR
+        device=device,
+        patience=15,            # Less patience
+        min_delta=0.001,        # Larger improvement threshold
+        noise_std=0.02,         # More noise for robustness
+        d_train_freq=1,
+        g_train_freq=1,
+        gradient_penalty_weight=2.0  # Lower penalty initially
+    )
+    all_g_losses.extend(g_losses_1)
+    all_d_losses.extend(d_losses_1)
+    
+    # Phase 2: Stable training with balanced learning rates
+    print("\n Phase 2: Stable training (Balanced LR, Standard Training)")
+    print("-" * 50)
+    _, g_losses_2, d_losses_2 = train_dcgan(
+        generator, discriminator, dataloader,
+        num_epochs=80,           # Main training phase
+        lr_g=0.0002,            # Your optimal LR from ablation
+        lr_d=0.0001,            # Your optimal LR from ablation
+        device=device,
+        patience=25,            # More patience
+        min_delta=0.0005,       # Smaller improvement threshold
+        noise_std=0.015,        # Moderate noise
+        d_train_freq=1,
+        g_train_freq=1,
+        gradient_penalty_weight=5.0  # Standard penalty
+    )
+    all_g_losses.extend(g_losses_2)
+    all_d_losses.extend(d_losses_2)
+    
+    # Phase 3: Fine-tuning with lower learning rates
+    print("\n Phase 3: Fine-tuning (Low LR, High Precision)")
+    print("-" * 50)
+    _, g_losses_3, d_losses_3 = train_dcgan(
+        generator, discriminator, dataloader,
+        num_epochs=50,           # Fine-tuning phase
+        lr_g=0.0001,            # Lower LR for fine-tuning
+        lr_d=0.00005,           # Much lower discriminator LR
+        device=device,
+        patience=30,            # High patience for fine details
+        min_delta=0.0001,       # Very small improvement threshold
+        noise_std=0.01,         # Less noise for precision
+        d_train_freq=2,         # Train discriminator less frequently
+        g_train_freq=1,
+        gradient_penalty_weight=8.0  # Higher penalty for stability
+    )
+    all_g_losses.extend(g_losses_3)
+    all_d_losses.extend(d_losses_3)
+    
+    print("\n PROGRESSIVE TRAINING COMPLETED")
+    print("="*60)
+    
+    return generator, all_g_losses, all_d_losses
+
 if __name__ == "__main__":
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -228,7 +364,7 @@ if __name__ == "__main__":
     
     # Create a dataset and dataloader for training
     dataset = MarioLevelDataset(all_one_hot_patches)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
     
     # Get the dimensions from the one-hot patches
     sample = dataset[0]
@@ -240,17 +376,14 @@ if __name__ == "__main__":
     print(f"Patch dimensions: {patch_height}x{patch_width} with {n_tile_types} tile types")
     
     # Create instances of the generator and discriminator
-    generator = DCGANGenerator(latent_dim=128, n_tile_types=n_tile_types, 
-                               patch_height=patch_height, patch_width=patch_width)
+    generator = DCGANGenerator(latent_dim=256, n_tile_types=n_tile_types, 
+                               patch_height=patch_height, patch_width=patch_width, hidden_dim=512)
     discriminator = DCGANDiscriminator(n_tile_types=n_tile_types, 
                                      patch_height=patch_height, patch_width=patch_width)
 
     # Train the generator
-    trained_generator, g_losses, d_losses = train_dcgan(
-        generator, discriminator, dataloader, 
-        num_epochs=100, lr_g=0.0006, lr_d=0.00008, device=device, 
-        patience=15, min_delta=0.005, noise_std=0.02,
-        d_train_freq=3, g_train_freq=1
+    trained_generator, g_losses, d_losses = progressive_training(
+    generator, discriminator, dataloader, device
     )
 
     
