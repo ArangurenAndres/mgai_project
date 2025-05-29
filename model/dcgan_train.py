@@ -16,15 +16,19 @@ if parent_dir not in sys.path:
 from utils.process_data import ProcessDataSymbolic
 
 class MarioLevelDataset(Dataset):
+    # Dataset for Mario levels
+    
     def __init__(self, level_patches):
         # Convert to tensors and permute to (C, H, W) format
         self.level_patches = [torch.clamp(torch.tensor(patch, dtype=torch.float32), 0, 1).permute(2, 0, 1) for patch in level_patches]
         
     def __len__(self):
-        return len(self.level_patches) # Number of level patches
+        # Number of level patches
+        return len(self.level_patches) 
     
     def __getitem__(self, index):
-        return self.level_patches[index] # Level patch at the given index
+        # Level patch at the given index
+        return self.level_patches[index] 
 
 def train_dcgan(generator, discriminator, dataloader, num_epochs=100, 
                         lr_g=0.0002, lr_d=0.0001, device='cpu', patience=20, 
@@ -34,18 +38,19 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
     generator.to(device)
     discriminator.to(device)
 
-    # Use different loss functions
+    # Loss function
     criterion = nn.BCELoss()
     
-    # Different optimizers with better parameters
+    # Optimizers for both generator and discriminator
     optimizer_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999), weight_decay=1e-5)
     optimizer_d = optim.Adam(discriminator.parameters(), lr=lr_d, betas=(0.5, 0.999), weight_decay=1e-5)
     
-    # Cosine annealing scheduler
+    # Learning rate schedulers
+    # CosineAnnealingLR reduces the learing rate following a cosine curve. Useful for fine-tuning towards the end of training.
     scheduler_g = optim.lr_scheduler.CosineAnnealingLR(optimizer_g, T_max=num_epochs)
     scheduler_d = optim.lr_scheduler.CosineAnnealingLR(optimizer_d, T_max=num_epochs)
 
-    # Label smoothing with noise
+    # Label smoothing
     real_label_base = 0.9
     fake_label_base = 0.1
     label_noise = 0.05
@@ -91,13 +96,14 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
                 output_fake = discriminator(fake_data.detach())
                 loss_d_fake = criterion(output_fake, fake_label)
 
-                # Gradient penalty (WGAN-GP style)
+                # Gradient penalty 
                 gradient_penalty = compute_gradient_penalty(discriminator, real_data, fake_data, device)
                 
                 loss_d = loss_d_real + loss_d_fake + gradient_penalty_weight * gradient_penalty
                 loss_d.backward()
                 
                 # Gradient clipping
+                # Prevents exploding gradients by capping them during backpropagation
                 torch.nn.utils.clip_grad_norm_(discriminator.parameters(), max_norm=1.0)
                 optimizer_d.step()
             else:
@@ -119,9 +125,11 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
                 loss_g = criterion(output, real_labels_for_gen)
                 
                 # Add diversity loss
+                # Encourages diversity in generated samples by maximizing pairwise distances
                 div_loss = diversity_loss(fake_data)
                 
                 # Feature matching loss
+                # Stabilizes training by matching the stats of real and fake data in the discriminator's feature space
                 feature_loss = feature_matching_loss(discriminator, real_data, fake_data)
                 
                 total_g_loss = loss_g + 0.1 * div_loss + 0.05 * feature_loss
@@ -148,7 +156,7 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
         g_losses.append(avg_g_loss)
         d_losses.append(avg_d_loss)
         
-        # Early stopping with more patience
+        # Early stopping
         if avg_g_loss < best_g_loss - min_delta:
             best_g_loss = avg_g_loss
             epochs_without_improvement = 0
@@ -160,12 +168,12 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
             
         # Generate sample every 10 epochs for monitoring
         if epoch % 10 == 0:
-            generator.eval()  # Set to evaluation mode to avoid BatchNorm issues
+            generator.eval() 
             with torch.no_grad():
                 sample_z = torch.randn(1, generator.latent_dim, device=device)
                 sample_output = generator(sample_z)
                 print(f"Sample output stats - Min: {sample_output.min():.3f}, Max: {sample_output.max():.3f}, Mean: {sample_output.mean():.3f}")
-            generator.train()  # Set back to training mode
+            generator.train()  
             
         if epochs_without_improvement >= patience:
             print(f"\nEarly stopping at epoch {epoch+1}")
@@ -175,7 +183,6 @@ def train_dcgan(generator, discriminator, dataloader, num_epochs=100,
     return generator, g_losses, d_losses
 
 def compute_gradient_penalty(discriminator, real_data, fake_data, device):
-    """Compute gradient penalty for WGAN-GP"""
     batch_size = real_data.size(0)
     alpha = torch.rand(batch_size, 1, 1, 1, device=device)
     
@@ -198,15 +205,6 @@ def compute_gradient_penalty(discriminator, real_data, fake_data, device):
     return gradient_penalty
 
 def feature_matching_loss(discriminator, real_data, fake_data):
-    """Feature matching loss to stabilize training"""
-    # Get intermediate features from discriminator
-    real_features = []
-    fake_features = []
-    
-    def hook_fn(module, input, output):
-        return output
-    
-    # This is a simplified version - you'd need to modify discriminator to return intermediate features
     with torch.no_grad():
         real_output = discriminator(real_data)
         fake_output = discriminator(fake_data)
@@ -236,34 +234,32 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
                 symbolic_patch = processor.backward_mapping_onehot(patch_np)
                 
                 if isinstance(symbolic_patch, tuple):
-                    symbolic_patch = symbolic_patch[1]  # Get the SECOND element (strings) if it's a tuple
+                    symbolic_patch = symbolic_patch[1] 
                 
                 # Add to the current row
                 row_patches.append(symbolic_patch)
             
-            # For each row in the patch height
             for i in range(len(row_patches[0])):
-                # Join the i-th row from each patch in this row
                 symbolic_row = ''.join([patch[i] for patch in row_patches])
                 symbolic_level.append(symbolic_row)
     
     return symbolic_level
 
 def diversity_loss(generated_batch):
+    # Encourage diversity in generated samples
     batch_size = generated_batch.size(0)
     generated_flat = generated_batch.view(batch_size, -1)
     
     # Calculate pairwise distances
     distances = torch.cdist(generated_flat, generated_flat)
     
-    # Encourage larger distaances (more diversity)
+    # Encourage larger distances (more diversity)
     diversity_loss = -torch.mean(distances)
     
     return diversity_loss * 0.1
 
 def progressive_training(generator, discriminator, dataloader, device):
-    """Train with progressively increasing difficulty and decreasing learning rates"""
-    
+    # Train with progressively increasing difficulty and decreasing learning rates
     print("="*60)
     print("STARTING PROGRESSIVE TRAINING")
     print("="*60)
@@ -271,12 +267,12 @@ def progressive_training(generator, discriminator, dataloader, device):
     all_g_losses = []
     all_d_losses = []
     
-    # Phase 1: Warm-up with higher learning rates and shorter patience
+    # Start with higher learning rates and shorter patience
     print("\n Phase 1: Warm-up training (High LR, Fast Convergence)")
     print("-" * 50)
     _, g_losses_1, d_losses_1 = train_dcgan(
         generator, discriminator, dataloader,
-        num_epochs=40,           # Shorter warm-up
+        num_epochs=40,          # Shorter warm-up
         lr_g=0.0004,            # Higher generator LR
         lr_d=0.0002,            # Higher discriminator LR
         device=device,
@@ -290,14 +286,14 @@ def progressive_training(generator, discriminator, dataloader, device):
     all_g_losses.extend(g_losses_1)
     all_d_losses.extend(d_losses_1)
     
-    # Phase 2: Stable training with balanced learning rates
+    # Stable training with balanced learning rates
     print("\n Phase 2: Stable training (Balanced LR, Standard Training)")
     print("-" * 50)
     _, g_losses_2, d_losses_2 = train_dcgan(
         generator, discriminator, dataloader,
-        num_epochs=80,           # Main training phase
-        lr_g=0.0002,            # Your optimal LR from ablation
-        lr_d=0.0001,            # Your optimal LR from ablation
+        num_epochs=80,          # Main training phase so high number of epochs
+        lr_g=0.0002,            # Optimal LR from ablation
+        lr_d=0.0001,            # Optimal LR from ablation
         device=device,
         patience=25,            # More patience
         min_delta=0.0005,       # Smaller improvement threshold
@@ -309,14 +305,14 @@ def progressive_training(generator, discriminator, dataloader, device):
     all_g_losses.extend(g_losses_2)
     all_d_losses.extend(d_losses_2)
     
-    # Phase 3: Fine-tuning with lower learning rates
+    # Fine-tuning with lower learning rates
     print("\n Phase 3: Fine-tuning (Low LR, High Precision)")
     print("-" * 50)
     _, g_losses_3, d_losses_3 = train_dcgan(
         generator, discriminator, dataloader,
-        num_epochs=50,           # Fine-tuning phase
+        num_epochs=50,          # Fine-tuning phase
         lr_g=0.0001,            # Lower LR for fine-tuning
-        lr_d=0.00005,           # Much lower discriminator LR
+        lr_d=0.00005,           # Even lower discriminator LR
         device=device,
         patience=30,            # High patience for fine details
         min_delta=0.0001,       # Very small improvement threshold
@@ -342,7 +338,7 @@ if __name__ == "__main__":
     parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     mapping_path = os.path.join(parent_dir, 'utils', 'mapping.yaml')
     
-    # Define the processor in ordedr to handle loading symbolic files and conversion to one-hot patches
+    # Define the processor in order to handle loading symbolic files and conversion to one-hot patches
     processor = ProcessDataSymbolic(mapping_path=mapping_path)
 
     # Load the folder of symbolic mario levels
@@ -386,13 +382,12 @@ if __name__ == "__main__":
     generator, discriminator, dataloader, device
     )
 
-    
     # Save the trained generator
     model_save_path = os.path.join(os.path.dirname(__file__), 'dcgan_mario_generator.pth')
     torch.save(trained_generator.state_dict(), model_save_path)
     print(f"Trained DCGAN generator saved to {model_save_path}")
 
-    # Plot the training losses (Epoch-wise)
+    # Plot the training losses 
     plt.figure(figsize=(10, 5))
     plt.plot(range(1, len(g_losses) + 1), g_losses, label='Generator Loss', marker='o', markersize=4)
     plt.plot(range(1, len(d_losses) + 1), d_losses, label='Discriminator Loss', marker='x', markersize=4)
@@ -404,7 +399,7 @@ if __name__ == "__main__":
     plt.tight_layout()
     
     # Create output directory for plots and generated levels
-    output_dir = os.path.join(os.path.dirname(__file__), 'generated_patches')
+    output_dir = os.path.join(os.path.dirname(__file__), 'generated_levels')
     os.makedirs(output_dir, exist_ok=True)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     plot_path = os.path.join(output_dir, f'dcgan_training_loss_{timestamp}.png')
@@ -413,7 +408,7 @@ if __name__ == "__main__":
     plt.close()
     
     print("\nGenerating a complete level using the trained DCGAN generator...")
-    level_width = 7  # Number of patches horizontally
+    level_width = 7  
     level_height = 1
     symbolic_level = generate_whole_level(trained_generator, processor, level_width, level_height, device)
 
@@ -433,7 +428,7 @@ if __name__ == "__main__":
     print("\nGenerated level after training:")
     processor.visualize_file(symbolic_level)
      
-    # Render the level using run_render()
+    # Render the level
     tile_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'tiles'))  # Path to tiles
     rendered_img = processor.render_level_image(
         symb_name=f"dcgan_level_{level_timestamp}.txt",

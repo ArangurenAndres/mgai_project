@@ -38,7 +38,7 @@ class HyperparameterAblation:
         print(f"Dataset info: {len(dataset)} patches, {self.patch_height}x{self.patch_width}, {self.n_tile_types} tile types")
         
     def train_single_config(self, config, config_id):
-        """Train a single configuration and return results"""
+        # Train a single config and return the results
         print(f"\n{'='*60}")
         print(f"Training Configuration {config_id}")
         print(f"Config: {config}")
@@ -86,7 +86,7 @@ class HyperparameterAblation:
         return result
     
     def train_dcgan_ablation(self, generator, discriminator, dataloader, config):
-        """Modified training function for ablation study"""
+        # MODIFIED TRAINING FUNCTION TO TEST MULTIPLE HYPERPARAMETER CONFIGS
         generator.to(self.device)
         discriminator.to(self.device)
 
@@ -190,7 +190,7 @@ class HyperparameterAblation:
         return generator, g_losses, d_losses
     
     def evaluate_model(self, generator, g_losses, d_losses, config, training_time):
-        """Evaluate the trained model and return metrics"""
+        # Evaluate the trained model
         metrics = {}
         
         # Training metrics
@@ -215,19 +215,18 @@ class HyperparameterAblation:
             metrics['g_loss_std'] < 0.001
         )
         
-        # Generate sample levels for quality assessment
+        # Generate sample levels
         try:
-            # Fixed level height = 1, variable width
-            level_width = 7  # Example width
+            level_width = 7  
             sample_level = generate_whole_level(generator, self.processor, level_width, 1, self.device)
             metrics['generation_success'] = True
             
-            # Simple diversity metric: count unique characters
+            # Count unique characters as a diversity metric
             level_str = ''.join(sample_level)
             unique_chars = len(set(level_str))
             metrics['character_diversity'] = unique_chars
             
-            # Check for repetitive patterns (simple heuristic)
+            # Check for repetitive patterns
             metrics['repetition_score'] = self.calculate_repetition_score(sample_level)
             
         except Exception as e:
@@ -253,7 +252,7 @@ class HyperparameterAblation:
         return metrics
     
     def calculate_repetition_score(self, level):
-        """Calculate how repetitive a level is (0 = very repetitive, 1 = very diverse)"""
+        # Calculate repetitiveness (0 is very repetitive, 1 is very diverse)
         if not level:
             return 0
         
@@ -262,7 +261,7 @@ class HyperparameterAblation:
         total_rows = len(level)
         row_diversity = unique_rows / total_rows if total_rows > 0 else 0
         
-        # Check for repeated patterns in columns (sample a few columns)
+        # Check for repeated patterns in columns 
         col_diversity = 0
         if level and len(level[0]) > 0:
             num_cols_to_check = min(10, len(level[0]))
@@ -276,7 +275,6 @@ class HyperparameterAblation:
         return (row_diversity + col_diversity) / 2
     
     def run_ablation_study(self):
-        """Run the complete ablation study"""
         print("Starting Hyperparameter Ablation Study")
         print("="*60)
         
@@ -286,7 +284,7 @@ class HyperparameterAblation:
             'lr_d': [0.0001, 0.0002, 0.0005],
             'batch_size': [16, 32, 64],
             'latent_dim': [64, 100, 128],
-            'max_epochs': [50],  # Fixed to save time
+            'max_epochs': [50],  
             'patience': [10, 15],
             'min_delta': [0.001, 0.005, 0.01],
             'real_label': [0.9, 1.0],
@@ -296,12 +294,12 @@ class HyperparameterAblation:
             'g_train_freq': [1],     # Train generator every N batches
         }
         
-        # Generate all combinations (this will be a lot!)
-        # Let's sample a subset for practical reasons
+        # Generate all combinations 
+        # Sample a subset for feasibility
         all_combinations = list(product(*hyperparameters.values()))
         
         # Sample a manageable number of combinations
-        max_experiments = 50  # Adjust based on your computational budget
+        max_experiments = 50  
         if len(all_combinations) > max_experiments:
             import random
             random.seed(42)
@@ -327,11 +325,11 @@ class HyperparameterAblation:
                 print(f"\nStarting experiment {i+1}/{len(selected_combinations)}")
                 self.train_single_config(config, i+1)
                 successful_experiments += 1
-                print(f"✓ Configuration {i+1} completed successfully")
+                print(f"Configuration {i+1} completed successfully")
                 
             except Exception as e:
                 failed_experiments += 1
-                print(f"✗ Configuration {i+1} failed: {str(e)}")
+                print(f"Configuration {i+1} failed: {str(e)}")
                 
                 # Save error info
                 error_result = {
@@ -358,7 +356,7 @@ class HyperparameterAblation:
                 self.results.append(error_result)
                 continue
             
-        print(f"\nAblation study completed!")
+        print(f"\nAblation study completed")
         print(f"Successful experiments: {successful_experiments}")
         print(f"Failed experiments: {failed_experiments}")
         
@@ -366,14 +364,13 @@ class HyperparameterAblation:
         if successful_experiments > 0:
             self.analyze_results()
         else:
-            print("No successful experiments to analyze!")
+            print("No successful experiments to analyze")
     
     def run_quick_ablation_study(self):
-        """Run a smaller ablation study for quick testing"""
         print("Starting Quick Hyperparameter Ablation Study")
         print("="*60)
         
-        # Smaller search space for quick testing
+        # Smaller search space
         hyperparameters = {
             'lr_g': [0.0001, 0.0002],
             'lr_d': [0.0001, 0.0002],
@@ -389,7 +386,7 @@ class HyperparameterAblation:
             'g_train_freq': [1],
         }
         
-        # Generate all combinations
+        # Generate ALL combinations
         all_combinations = list(product(*hyperparameters.values()))
         print(f"Testing {len(all_combinations)} hyperparameter combinations")
         
@@ -414,13 +411,12 @@ class HyperparameterAblation:
             self.analyze_results()
             
     def save_intermediate_results(self, config_id):
-        """Save results after each experiment"""
         results_dir = os.path.join(os.path.dirname(__file__), 'ablation_results')
         os.makedirs(results_dir, exist_ok=True)
         
         # Save detailed results
         with open(os.path.join(results_dir, f'results_{config_id}.json'), 'w') as f:
-            # Convert numpy arrays and other non-serializable types to JSON-compatible formats
+            # Convert to JSON-compatible formats
             result_copy = self.results[-1].copy()
             
             # Convert losses to lists
@@ -460,7 +456,6 @@ class HyperparameterAblation:
             json.dump(result_copy, f, indent=2)
     
     def analyze_results(self):
-        """Analyze and visualize the ablation study results"""
         if not self.results:
             print("No results to analyze!")
             return
@@ -514,7 +509,6 @@ class HyperparameterAblation:
         self.print_summary_stats(df)
     
     def print_config(self, config_row):
-        """Print a configuration in a readable format"""
         important_params = ['lr_g', 'lr_d', 'batch_size', 'latent_dim', 'patience', 'min_delta', 
                           'real_label', 'fake_label', 'noise_std', 'd_train_freq']
         for param in important_params:
@@ -522,9 +516,7 @@ class HyperparameterAblation:
                 print(f"  {param}: {config_row[param]}")
     
     def create_visualizations(self, df, results_dir):
-        """Create various plots to analyze the results"""
-        
-        # 1. Quality score vs hyperparameters
+        # Quality score vs hyperparameters
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         fig.suptitle('Hyperparameter Effects on Quality Score', fontsize=16)
         
@@ -544,7 +536,7 @@ class HyperparameterAblation:
         plt.savefig(os.path.join(results_dir, 'hyperparameter_effects.png'), dpi=300, bbox_inches='tight')
         plt.close()
         
-        # 2. Training curves for best configurations
+        # Training curves for best configurations
         valid_results = df[~df['mode_collapse'] & df['generation_success']]
         if len(valid_results) > 0:
             best_configs = valid_results.nsmallest(5, 'quality_score')
@@ -575,7 +567,7 @@ class HyperparameterAblation:
             plt.savefig(os.path.join(results_dir, 'best_training_curves.png'), dpi=300, bbox_inches='tight')
             plt.close()
         
-        # 3. Correlation heatmap
+        # Correlation heatmap
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         correlation_matrix = df[numeric_cols].corr()
         
@@ -589,7 +581,6 @@ class HyperparameterAblation:
         print(f"\nVisualization saved to {results_dir}")
     
     def print_summary_stats(self, df):
-        """Print summary statistics"""
         print("\nSUMMARY STATISTICS:")
         print("-" * 40)
         print(f"Total experiments: {len(df)}")
@@ -605,12 +596,11 @@ class HyperparameterAblation:
             print(f"Average character diversity: {valid_df['character_diversity'].mean():.2f}")
 
 def main():
-    """Main function to run the ablation study"""
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Load data (same as your main training script)
+    # Load data
     parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     mapping_path = os.path.join(parent_dir, 'utils', 'mapping.yaml')
     

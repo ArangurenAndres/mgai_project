@@ -3,6 +3,7 @@ import os
 import sys
 import time
 from dcgan_model import DCGANGenerator
+from model.mlp_model import MLPGenerator
 
 # Add parent directory to path for imports
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -11,30 +12,41 @@ if parent_dir not in sys.path:
     
 from utils.process_data import ProcessDataSymbolic
 
-def load_trained_generator(model_path, latent_dim, n_tile_types, patch_height, patch_width, hidden_dim, device):
-    """Load a trained DCGAN generator from saved state dict"""
-    generator = DCGANGenerator(
-        latent_dim=latent_dim, 
-        n_tile_types=n_tile_types,
-        patch_height=patch_height, 
-        patch_width=patch_width, 
-        hidden_dim=hidden_dim
-    )
+def load_trained_generator(model_path, model_type, latent_dim, n_tile_types, patch_height, patch_width, hidden_dim, device):
+    # Load a trained generator to generate levels
+    
+    if model_type.lower() == 'dcgan':
+        generator = DCGANGenerator(
+            latent_dim=latent_dim, 
+            n_tile_types=n_tile_types,
+            patch_height=patch_height, 
+            patch_width=patch_width, 
+            hidden_dim=hidden_dim
+        )
+    elif model_type.lower() == 'mlp':
+        generator = MLPGenerator(
+            patch_height=patch_height,
+            patch_width=patch_width,
+            n_tile_types=n_tile_types,
+            latent_dim=latent_dim,
+            hidden_dim=hidden_dim
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}. Use 'dcgan' or 'mlp'.")
     
     # Load the saved state dict
     generator.load_state_dict(torch.load(model_path, map_location=device))
     generator.to(device)
-    generator.eval()  # Set to evaluation mode
+    generator.eval()  
     
-    print(f"Loaded trained generator from: {model_path}")
+    print(f"Loaded trained {model_type.upper()} generator from: {model_path}")
     return generator
 
-def generate_whole_level(generator, processor, num_patches_width=7, num_patches_height=14, device='cpu'):
-    """Generate a complete level using the trained generator"""
+def generate_whole_level(generator, processor, num_patches_width=7, num_patches_height=14, device='cpu', model_type='dcgan'):
     generator.eval()
     symbolic_level = []
     
-    print(f"Generating level: {num_patches_height} x {num_patches_width} patches")
+    print(f"Generating level: {num_patches_height} x {num_patches_width} patches using {model_type.upper()}")
     
     with torch.no_grad():
         for h in range(num_patches_height):
@@ -46,8 +58,13 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
                 # Generate a patch
                 generated_patch = generator(z)
                 
-                # Convert from tensor to numpy and reshape
-                patch_np = generated_patch.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                # Handle different output formats between DCGAN and MLP
+                if model_type.lower() == 'dcgan':
+                    patch_np = generated_patch.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                elif model_type.lower() == 'mlp':
+                    patch_np = generated_patch.squeeze(0).cpu().numpy()
+                else:
+                    raise ValueError(f"Unsupported model type: {model_type}")
                 
                 # Convert to symbolic
                 symbolic_patch = processor.backward_mapping_onehot(patch_np)
@@ -57,7 +74,6 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
                 
                 row_patches.append(symbolic_patch)
             
-            # Combine patches horizontally for each row
             for i in range(len(row_patches[0])):
                 symbolic_row = ''.join([patch[i] for patch in row_patches])
                 symbolic_level.append(symbolic_row)
@@ -65,15 +81,14 @@ def generate_whole_level(generator, processor, num_patches_width=7, num_patches_
     return symbolic_level
 
 def generate_multiple_levels(generator, processor, num_levels=5, level_width=7, level_height=1, 
-                           output_dir=None, device='cpu', render_images=True):
-    """Generate multiple levels and save them"""
+                           output_dir=None, device='cpu', render_images=True, model_type='dcgan'):
     
     if output_dir is None:
-        output_dir = os.path.join(os.path.dirname(__file__), 'generated_levels_batch')
+        output_dir = os.path.join(os.path.dirname(__file__), f'generated_levels')
     
     os.makedirs(output_dir, exist_ok=True)
     
-    print(f"\nGenerating {num_levels} levels...")
+    print(f"\nGenerating {num_levels} levels using {model_type.upper()}...")
     print(f"Output directory: {output_dir}")
     print("=" * 60)
     
@@ -84,12 +99,12 @@ def generate_multiple_levels(generator, processor, num_levels=5, level_width=7, 
         
         # Generate the level
         symbolic_level = generate_whole_level(
-            generator, processor, level_width, level_height, device
+            generator, processor, level_width, level_height, device, model_type
         )
         
         # Create filename with timestamp and index
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        level_filename = f'dcgan_level_{i+1:03d}_{timestamp}.txt'
+        level_filename = f'{model_type}_level_{i+1:03d}_{timestamp}.txt'
         level_path = os.path.join(output_dir, level_filename)
         
         # Save the level as text file
@@ -101,7 +116,7 @@ def generate_multiple_levels(generator, processor, num_levels=5, level_width=7, 
         
         # Display level preview
         print("Level preview:")
-        for j, row in enumerate(symbolic_level[:3]):  # Show first 3 rows
+        for j, row in enumerate(symbolic_level[:3]): 
             print(f"   {row}")
         if len(symbolic_level) > 3:
             print(f"   ... ({len(symbolic_level)-3} more rows)")
@@ -134,18 +149,17 @@ def generate_multiple_levels(generator, processor, num_levels=5, level_width=7, 
     return generated_levels
 
 def generate_levels_with_variations(generator, processor, base_seed=None, num_variations=3, 
-                                  level_width=7, level_height=1, output_dir=None, device='cpu'):
-    """Generate levels with controlled variations using seeds"""
+                                  level_width=7, level_height=1, output_dir=None, device='cpu', model_type='dcgan'):
     
     if output_dir is None:
-        output_dir = os.path.join(os.path.dirname(__file__), 'generated_levels_variations')
+        output_dir = os.path.join(os.path.dirname(__file__), f'generated_levels_variations_{model_type}')
     
     os.makedirs(output_dir, exist_ok=True)
     
     if base_seed is None:
         base_seed = int(time.time())
     
-    print(f"\nGenerating {num_variations} level variations...")
+    print(f"\nGenerating {num_variations} level variations using {model_type.upper()}...")
     print(f"Base seed: {base_seed}")
     print(f"Output directory: {output_dir}")
     print("=" * 60)
@@ -161,12 +175,12 @@ def generate_levels_with_variations(generator, processor, base_seed=None, num_va
         
         # Generate the level
         symbolic_level = generate_whole_level(
-            generator, processor, level_width, level_height, device
+            generator, processor, level_width, level_height, device, model_type
         )
         
         # Create filename with seed
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        level_filename = f'dcgan_level_seed{seed}_{timestamp}.txt'
+        level_filename = f'{model_type}_level_seed{seed}_{timestamp}.txt'
         level_path = os.path.join(output_dir, level_filename)
         
         # Save the level
@@ -193,29 +207,105 @@ def generate_levels_with_variations(generator, processor, base_seed=None, num_va
     print(f"\nSuccessfully generated {len(generated_levels)} level variations!")
     return generated_levels
 
+def get_model_config(model_type):
+    if model_type.lower() == 'dcgan':
+        return {
+            'latent_dim': 256,
+            'hidden_dim': 512,
+            'patch_height': 14,
+            'patch_width': 28,
+            'n_tile_types': 10
+        }
+    elif model_type.lower() == 'mlp':
+        return {
+            'latent_dim': 32,
+            'hidden_dim': 256,
+            'patch_height': 14,
+            'patch_width': 28,
+            'n_tile_types': 10
+        }
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+def get_model_path(model_type):
+    if model_type.lower() == 'dcgan':
+        return os.path.join(os.path.dirname(__file__), 'dcgan_mario_generator.pth')
+    elif model_type.lower() == 'mlp':
+        return os.path.join(os.path.dirname(__file__), 'mlp_mario_generator.pth')
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
 if __name__ == "__main__":
     # Configuration
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Model parameters (should match your training configuration)
-    MODEL_CONFIG = {
-        'latent_dim': 256,
-        'hidden_dim': 512,
-        'patch_height': 14,  # Update these based on your actual patch dimensions
-        'patch_width': 28,   # Update these based on your actual patch dimensions
-        'n_tile_types': 10   # Update this based on your actual number of tile types
-    }
+    # Choose model type
+    print("\nChoose model type:")
+    print("1. DCGAN (Deep Convolutional GAN)")
+    print("2. MLP (Multi-Layer Perceptron)")
+    
+    model_choice = input("Enter choice (1 or 2): ").strip()
+    
+    if model_choice == "1":
+        model_type = "dcgan"
+    elif model_choice == "2":
+        model_type = "mlp"
+    else:
+        print("Invalid choice. Defaulting to DCGAN.")
+        model_type = "dcgan"
+    
+    print(f"Selected model: {model_type.upper()}")
+    
+    # Get model configuration
+    MODEL_CONFIG = get_model_config(model_type)
+    model_path = get_model_path(model_type)
+    
+    # Display current configuration
+    print(f"\nModel Configuration:")
+    for key, value in MODEL_CONFIG.items():
+        print(f"   {key}: {value}")
+    
+    # Allow user to modify configuration
+    modify_config = input("\nModify configuration? (y/n, default: n): ").strip().lower()
+    if modify_config == 'y':
+        print("\nEnter new values (press Enter to keep current):")
+        for key in MODEL_CONFIG.keys():
+            current_value = MODEL_CONFIG[key]
+            new_value = input(f"  {key} (current: {current_value}): ").strip()
+            if new_value:
+                MODEL_CONFIG[key] = int(new_value)
     
     # Paths
-    model_path = os.path.join(os.path.dirname(__file__), 'dcgan_mario_generator.pth')
     mapping_path = os.path.join(os.path.dirname(__file__), '..', 'utils', 'mapping.yaml')
     
     # Check if model exists
     if not os.path.exists(model_path):
         print(f"Model file not found: {model_path}")
         print("Please make sure you have trained and saved a model first.")
-        exit(1)
+        
+        dcgan_path = get_model_path('dcgan')
+        mlp_path = get_model_path('mlp')
+        
+        print("\nLooking for alternative models...")
+        if os.path.exists(dcgan_path) and model_type != 'dcgan':
+            print(f"Found DCGAN model: {dcgan_path}")
+            use_alt = input("Use DCGAN model instead? (y/n): ").strip().lower()
+            if use_alt == 'y':
+                model_type = 'dcgan'
+                MODEL_CONFIG = get_model_config(model_type)
+                model_path = dcgan_path
+        elif os.path.exists(mlp_path) and model_type != 'mlp':
+            print(f"Found MLP model: {mlp_path}")
+            use_alt = input("Use MLP model instead? (y/n): ").strip().lower()
+            if use_alt == 'y':
+                model_type = 'mlp'
+                MODEL_CONFIG = get_model_config(model_type)
+                model_path = mlp_path
+        
+        if not os.path.exists(model_path):
+            print("No trained models found. Please train a model first.")
+            exit(1)
     
     # Initialize processor
     processor = ProcessDataSymbolic(mapping_path=mapping_path)
@@ -223,12 +313,13 @@ if __name__ == "__main__":
     # Load the trained generator
     generator = load_trained_generator(
         model_path=model_path,
+        model_type=model_type,
         device=device,
         **MODEL_CONFIG
     )
     
     # Choose generation mode
-    print("\nChoose generation mode:")
+    print(f"\nChoose generation mode for {model_type.upper()}:")
     print("1. Generate multiple random levels")
     print("2. Generate variations with controlled seeds")
     print("3. Generate single custom level")
@@ -248,7 +339,8 @@ if __name__ == "__main__":
             level_width=level_width,
             level_height=level_height,
             device=device,
-            render_images=True
+            render_images=True,
+            model_type=model_type
         )
         
     elif choice == "2":
@@ -262,7 +354,8 @@ if __name__ == "__main__":
             processor=processor,
             base_seed=base_seed,
             num_variations=num_variations,
-            device=device
+            device=device,
+            model_type=model_type
         )
         
     elif choice == "3":
@@ -270,18 +363,18 @@ if __name__ == "__main__":
         level_width = int(input("Level width in patches? (default: 7): ") or "7")
         level_height = int(input("Level height in patches? (default: 1): ") or "1")
         
-        print(f"\nGenerating custom level ({level_height}x{level_width} patches)...")
+        print(f"\nGenerating custom level ({level_height}x{level_width} patches) using {model_type.upper()}...")
         
         symbolic_level = generate_whole_level(
-            generator, processor, level_width, level_height, device
+            generator, processor, level_width, level_height, device, model_type
         )
         
         # Save the level
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        output_dir = os.path.join(os.path.dirname(__file__), 'generated_levels_custom')
+        output_dir = os.path.join(os.path.dirname(__file__), f'generated_levels_custom_{model_type}')
         os.makedirs(output_dir, exist_ok=True)
         
-        level_filename = f'dcgan_custom_level_{timestamp}.txt'
+        level_filename = f'{model_type}_custom_level_{timestamp}.txt'
         level_path = os.path.join(output_dir, level_filename)
         
         with open(level_path, 'w') as f:
@@ -309,4 +402,4 @@ if __name__ == "__main__":
     else:
         print("Invalid choice. Please run the script again.")
     
-    print("\n Level generation completed!")
+    print(f"\nLevel generation completed using {model_type.upper()}!")
